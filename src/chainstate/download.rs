@@ -961,11 +961,11 @@ fn restore_api(
     println!("Starting postgres...");
     crate::utils::docker::compose_up_service(data_dir, "postgres")?;
     for _ in 0..60 {
-        let ready = Command::new("docker")
-            .args(["exec", "stacks-postgres", "pg_isready", "-U", user])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
+        let ready =
+            crate::utils::docker::compose_exec(data_dir, "postgres", &["pg_isready", "-U", user])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
         if ready {
             break;
         }
@@ -977,24 +977,7 @@ fn restore_api(
     spinner.set_style(
         ProgressStyle::with_template("{spinner} {elapsed} restored {pos} objects").unwrap(),
     );
-    let mut child = Command::new("docker")
-        .args([
-            "exec",
-            "stacks-postgres",
-            "pg_restore",
-            "--username",
-            user,
-            "--verbose",
-            "--jobs",
-            "4",
-            "--clean",
-            "--if-exists",
-            "--no-owner",
-            "--no-acl",
-            "--dbname",
-            "stacks_blockchain_api",
-            &in_container,
-        ])
+    let mut child = pg_restore_command(data_dir, user, &in_container)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -1025,6 +1008,28 @@ fn restore_api(
     println!("Stopping postgres...");
     crate::utils::docker::compose_stop_service(data_dir, "postgres")?;
     verdict
+}
+
+fn pg_restore_command(data_dir: &Path, user: &str, in_container: &str) -> Command {
+    crate::utils::docker::compose_exec(
+        data_dir,
+        "postgres",
+        &[
+            "pg_restore",
+            "--username",
+            user,
+            "--verbose",
+            "--jobs",
+            "4",
+            "--clean",
+            "--if-exists",
+            "--no-owner",
+            "--no-acl",
+            "--dbname",
+            "stacks_blockchain_api",
+            in_container,
+        ],
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1109,6 +1114,32 @@ fn free_disk_bytes(dir: &Path) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pg_restore_runs_in_this_deployments_postgres_service() {
+        let cmd = pg_restore_command(Path::new("/dd"), "stacks", "/downloads/x.dump");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(args[2].starts_with("/dd"));
+        let expected = [
+            "exec",
+            "-T",
+            "postgres",
+            "pg_restore",
+            "--username",
+            "stacks",
+        ];
+        assert_eq!(args[3..9], expected);
+        for flag in ["--clean", "--if-exists", "--no-owner", "--no-acl"] {
+            assert!(args.iter().any(|a| a == flag), "missing {flag}");
+        }
+        let dbname = args.iter().position(|a| a == "--dbname").unwrap();
+        assert_eq!(args[dbname + 1], "stacks_blockchain_api");
+        assert_eq!(args.last().unwrap(), "/downloads/x.dump");
+        assert!(!args.iter().any(|a| a == "stacks-postgres"));
+    }
 
     #[test]
     fn parses_node_archive_version() {

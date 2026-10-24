@@ -188,6 +188,14 @@ pub fn compose_stop_service(data_dir: &Path, service: &str) -> Result<()> {
     run(cmd, "docker compose stop")
 }
 
+/// `docker compose exec` into a running service.
+pub(crate) fn compose_exec(data_dir: &Path, service: &str, args: &[&str]) -> Command {
+    let mut cmd = compose(data_dir);
+    cmd.args(["exec", "-T", service]);
+    cmd.args(args);
+    cmd
+}
+
 /// Run a compose subcommand and capture its stdout (stderr appended on failure instead of erroring,
 /// support bundles want best-effort output).
 pub(crate) fn compose_capture(data_dir: &Path, args: &[&str]) -> Result<String> {
@@ -460,6 +468,20 @@ mod tests {
         assert_eq!(args[..2], ["compose", "-f"]);
         assert!(args[2].ends_with("rendered/docker-compose.yml"));
         assert!(args[2].starts_with("/data"));
+    }
+
+    #[test]
+    fn compose_exec_targets_service_through_compose_without_tty() {
+        let cmd = compose_exec(Path::new("/data"), "postgres", &["psql", "-tAc", "x"]);
+        assert_eq!(cmd.get_program(), "docker");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args[..2], ["compose", "-f"]);
+        assert!(args[2].starts_with("/data"));
+        assert!(args[2].ends_with("rendered/docker-compose.yml"));
+        assert_eq!(args[3..], ["exec", "-T", "postgres", "psql", "-tAc", "x"]);
     }
 
     #[test]
