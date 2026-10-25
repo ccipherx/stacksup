@@ -3,6 +3,7 @@
 
 use std::path::Path;
 use std::process::Command;
+use std::process::Stdio;
 
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
@@ -193,6 +194,7 @@ pub(crate) fn compose_exec(data_dir: &Path, service: &str, args: &[&str]) -> Com
     let mut cmd = compose(data_dir);
     cmd.args(["exec", "-T", service]);
     cmd.args(args);
+    cmd.stdin(Stdio::null());
     cmd
 }
 

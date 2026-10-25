@@ -458,9 +458,11 @@ mod tests {
             "name = \"testnet-b\"\nnetwork = \"mainnet\"\n[bitcoind]\nmode = \"enabled\"\n[stacks-api]\nmode = \"enabled\"\n[postgres]\nmode = \"enabled\"",
         );
         let dir = Path::new("/dd");
+        let compose_file = crate::config::render::compose_file(dir);
+        let compose_file = compose_file.to_string_lossy();
 
         let api = args(&api_tip_command(&s, dir));
-        assert!(api[2].starts_with("/dd"));
+        assert_eq!(api[..3], ["compose", "-f", &compose_file]);
         let expected = [
             "exec",
             "-T",
@@ -471,12 +473,12 @@ mod tests {
             "-d",
             "stacks_blockchain_api",
             "-tAc",
+            "SELECT block_height, burn_block_height FROM stacks_blockchain_api.chain_tip",
         ];
-        assert_eq!(api[3..12], expected);
-        assert!(api[12].contains("chain_tip"));
+        assert_eq!(api[3..], expected);
 
         let btc = args(&bitcoind_tip_command(&s, dir));
-        assert!(btc[2].starts_with("/dd"));
+        assert_eq!(btc[..3], ["compose", "-f", &compose_file]);
         let expected = [
             "exec",
             "-T",
@@ -487,23 +489,37 @@ mod tests {
         ];
         assert_eq!(btc[3..], expected);
 
-        // Container names differ per deployment; only compose service names may appear.
-        let container_names = [
-            "stacks-postgres",
-            "stacks-bitcoind",
-            "testnet-b-postgres",
-            "testnet-b-bitcoind",
-            "-p",
-        ];
-        for arg in api.iter().chain(&btc) {
-            assert!(!container_names.contains(&arg.as_str()), "got {arg}");
-        }
-
         let s = deployment(
             "network = \"testnet\"\n[stacks-api]\nmode = \"enabled\"\n[postgres]\nmode = \"enabled\"\nuser = \"stacks\"",
         );
         let api = args(&api_tip_command(&s, dir));
         assert_eq!(api[7..9], ["-U", "stacks"]);
+    }
+
+    #[test]
+    fn tip_probes_use_rendered_service_names() {
+        let dir = temp_dir("services");
+        let mut s = deployment(
+            "network = \"mainnet\"\n[bitcoind]\nmode = \"enabled\"\n[stacks-node]\nmode = \"enabled\"\n[stacks-api]\nmode = \"enabled\"\n[postgres]\nmode = \"enabled\"",
+        );
+        s.postgres.password = Some("test-pg-password".into());
+        s.stacks_node.auth_token = Some("test-node-token".into());
+        s.bitcoind.rpc_user = Some("stacksup".into());
+        s.bitcoind.rpc_password = Some("test-btc-password".into());
+        crate::config::render::render(&s, &dir).unwrap();
+
+        let compose_file = crate::config::render::compose_file(&dir);
+        let compose: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(compose_file).unwrap()).unwrap();
+        let services = compose["services"].as_mapping().unwrap();
+        for cmd in [api_tip_command(&s, &dir), bitcoind_tip_command(&s, &dir)] {
+            let service = args(&cmd)[5].clone();
+            assert!(
+                services.contains_key(service.as_str()),
+                "{service} is not rendered"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
